@@ -49,7 +49,13 @@
 </head>
 <body class="h-full text-gray-800 antialiased font-sans bg-slate-50 flex flex-col min-h-screen relative">
 
-    <!-- OVERLAY LOADING GLOBAL -->
+    <!-- INDIKATOR SINKRONISASI DATA DI HEADER (HALUS & TIDAK MENGGANGGU) -->
+    <div id="sync-banner" class="hidden bg-amber-500 text-white text-[11px] font-bold py-1 px-4 text-center sticky top-0 z-50 shadow-sm flex items-center justify-center space-x-2">
+        <div class="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+        <span>Menyinkronkan data terbaru dari server...</span>
+    </div>
+
+    <!-- OVERLAY LOADING GLOBAL (HANYA UNTUK SIMPAN/HAPUS DATA ADMIN) -->
     <div id="loading-overlay" class="fixed inset-0 z-[999999] hidden bg-slate-900/60 backdrop-blur-sm flex flex-col items-center justify-center p-4">
         <div class="bg-slate-900 text-white rounded-2xl p-6 shadow-2xl flex flex-col items-center space-y-3 border border-slate-700 max-w-xs w-full text-center">
             <div class="w-10 h-10 border-4 border-brand-500 border-t-transparent rounded-full animate-spin"></div>
@@ -115,12 +121,28 @@
         </header>
 
         <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-10">
+            <!-- FITUR PENCARIAN GLOBAL DI HALAMAN DEPAN -->
+            <div class="mb-8 bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-sm">
+                <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                    <i class="fa-solid fa-magnifying-glass text-brand-600 mr-1"></i> Cari Semua Produk
+                </label>
+                <div class="relative w-full">
+                    <input type="text" id="global-search-input" onkeyup="handleGlobalSearch(event)" placeholder="Ketik nama produk yang dicari, contoh: Sapu, Mesin, Speaker..." class="w-full pl-10 pr-24 py-3 text-xs sm:text-sm bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:border-brand-500 focus:ring-2 focus:ring-brand-200 outline-none transition">
+                    <span class="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-400">
+                        <i class="fa-solid fa-magnifying-glass text-sm"></i>
+                    </span>
+                    <button onclick="executeGlobalSearch()" class="absolute right-1.5 top-1.5 bottom-1.5 px-4 bg-brand-600 hover:bg-brand-700 text-white rounded-lg text-xs font-bold transition">
+                        Cari
+                    </button>
+                </div>
+            </div>
+
             <div class="flex items-center justify-between mb-6">
                 <div>
                     <span class="text-[11px] font-bold text-brand-600 uppercase tracking-widest block mb-1">KATALOG PRODUK</span>
                     <h2 class="text-xl sm:text-2xl font-black text-slate-900 uppercase tracking-tight">PILIH KATEGORI</h2>
                 </div>
-                <span class="hidden sm:block text-xs text-slate-400 font-medium">Klik kategori untuk melihat produk</span>
+                <span class="hidden sm:block text-xs text-slate-400 font-medium">Atau klik kategori di bawah ini</span>
             </div>
 
             <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6" id="landing-category-buttons">
@@ -578,8 +600,26 @@
             document.getElementById('footer-year').innerText = new Date().getFullYear();
         });
 
-        // HANDLE NAVIGASI TOMBOL KEMBALI HP
+        // NAVIGASI BACK HP (DETAIL PRODUK & ADMIN PANEL)
         window.addEventListener('popstate', function(event) {
+            const modalDetail = document.getElementById('product-modal');
+            const modalAdmin = document.getElementById('admin-modal');
+
+            if (modalDetail && !modalDetail.classList.contains('hidden')) {
+                modalDetail.classList.add('hidden');
+                activeProduct = null;
+                return;
+            }
+
+            if (modalAdmin && !modalAdmin.classList.contains('hidden')) {
+                isAdminLoggedIn = false;
+                modalAdmin.classList.add('hidden');
+                document.getElementById('admin-login-view').classList.remove('hidden');
+                document.getElementById('admin-content-view').classList.add('hidden');
+                document.getElementById('admin-pin').value = "";
+                return;
+            }
+
             if (event.state && event.state.screen === 'catalog') {
                 selectedCategory = event.state.category;
                 showCatalogView();
@@ -588,11 +628,18 @@
             }
         });
 
+        // 🚀 DUAL STORAGE LOAD DATA (LOCAL FIRST + BACKGROUND SYNC)
         async function loadData() {
+            // 1. MEMUAT DENGAN TAMPILAN INSTAN (0 DETIK) DARI MEMORI LOKAL BROWSER
+            fallbackLocalData();
+            renderLandingPage();
+
+            // 2. LAKUKAN SINKRONISASI DENGAN GOOGLE SHEETS DI BACKGROUND
             if (gasApiUrl && gasApiUrl !== "PASANG_URL_WEB_APP_GAS_ANDA_DI_SINI") {
+                const syncBanner = document.getElementById('sync-banner');
+                if (syncBanner) syncBanner.classList.remove('hidden');
+
                 try {
-                    showLoading("Menghubungkan ke Google Sheets...");
-                    showToast("Menghubungkan ke Google Sheets...", "info");
                     const res = await fetch(`${gasApiUrl}?action=getInitialData`);
                     const data = await res.json();
 
@@ -600,22 +647,22 @@
                         products = data.products || [];
                         companyProfile = data.profile || defaultCompanyProfile;
                         categoryAdmins = data.categoryAdmins || defaultCategoryAdmins;
-                        showToast("Data berhasil dimuat dari Google Sheets!", "success");
-                    } else {
-                        fallbackLocalData();
+
+                        // Perbarui memori penyimpanan lokal agar sinkron
+                        saveData();
+
+                        // Perbarui tampilan web secara halus tanpa merestart halaman
+                        renderLandingPage();
+                        if (!document.getElementById('catalog-screen').classList.contains('hidden')) {
+                            renderProducts();
+                        }
                     }
                 } catch (e) {
-                    console.error("Gagal load dari GAS:", e);
-                    showToast("Gagal tersambung ke GSheet. Menggunakan penyimpanan lokal.", "error");
-                    fallbackLocalData();
+                    console.error("Gagal sinkronisasi dari GAS:", e);
                 } finally {
-                    hideLoading();
+                    if (syncBanner) syncBanner.classList.add('hidden');
                 }
-            } else {
-                fallbackLocalData();
             }
-
-            renderLandingPage();
         }
 
         function fallbackLocalData() {
@@ -689,7 +736,7 @@
         }
 
         function goToLandingPage() {
-            if (window.location.hash === "#katalog") {
+            if (window.location.hash === "#katalog" || window.location.hash === "#detail" || window.location.hash === "#admin") {
                 history.back();
             } else {
                 showLandingView();
@@ -711,10 +758,40 @@
             window.scrollTo({ top: 0, behavior: 'smooth' });
         }
 
+        function handleGlobalSearch(event) {
+            if (event.key === 'Enter') {
+                executeGlobalSearch();
+            }
+        }
+
+        function executeGlobalSearch() {
+            const query = document.getElementById('global-search-input').value.trim();
+            if (!query) {
+                showToast("Masukkan kata kunci produk yang ingin dicari!", "error");
+                return;
+            }
+
+            selectedCategory = "Semua Kategori";
+            history.pushState({ screen: 'catalog', category: 'Semua Kategori' }, "", "#katalog");
+            showCatalogView();
+
+            const catalogSearchInput = document.getElementById('search-input');
+            if (catalogSearchInput) {
+                catalogSearchInput.value = query;
+            }
+            
+            renderProductsGlobal(query);
+        }
+
         function renderProducts() {
             const searchInput = document.getElementById('search-input');
             const searchTerm = searchInput ? searchInput.value.toLowerCase().trim() : '';
             
+            if (selectedCategory === "Semua Kategori") {
+                renderProductsGlobal(searchTerm);
+                return;
+            }
+
             document.getElementById('active-category-title').innerText = selectedCategory;
             
             const adminPhone = categoryAdmins[selectedCategory] || "081234567890";
@@ -769,6 +846,60 @@
             }
         }
 
+        function renderProductsGlobal(searchTerm = "") {
+            const query = searchTerm.toLowerCase().trim();
+            
+            document.getElementById('active-category-title').innerText = "Hasil Pencarian Produk";
+            document.getElementById('active-category-admin-phone').innerText = "Layanan Admin";
+
+            const filteredProducts = products.filter(p => {
+                return p.title.toLowerCase().includes(query) || p.description.toLowerCase().includes(query) || p.category.toLowerCase().includes(query);
+            });
+
+            document.getElementById('product-count-text').innerText = `Ditemukan ${filteredProducts.length} produk untuk kata kunci "${searchTerm}"`;
+
+            const grid = document.getElementById('product-grid');
+            const emptyState = document.getElementById('empty-state');
+
+            if (filteredProducts.length === 0) {
+                grid.classList.add('hidden');
+                emptyState.classList.remove('hidden');
+                emptyState.classList.add('flex');
+            } else {
+                emptyState.classList.add('hidden');
+                emptyState.classList.remove('flex');
+                grid.classList.remove('hidden');
+
+                grid.innerHTML = filteredProducts.map(p => {
+                    const finalPrice = p.price - (p.price * (p.discount / 100));
+                    return `
+                        <div onclick="openProductModal('${p.id}')" class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm hover:shadow-md transition cursor-pointer flex flex-col group">
+                            <div class="relative aspect-square bg-slate-100 overflow-hidden">
+                                <img src="${p.image}" alt="${p.title}" class="w-full h-full object-cover group-hover:scale-105 transition duration-300" onerror="this.src='https://placehold.co/400x400/f1f5f9/94a3b8?text=Produk'">
+                                ${p.discount > 0 ? `<span class="absolute top-2 left-2 bg-red-500 text-white text-[10px] font-extrabold px-2 py-0.5 rounded-md shadow">${p.discount}% OFF</span>` : ''}
+                                <span class="absolute bottom-2 right-2 bg-slate-900/80 text-white text-[9px] font-bold px-2 py-0.5 rounded backdrop-blur-xs">${p.category}</span>
+                            </div>
+                            <div class="p-3.5 flex-1 flex flex-col justify-between">
+                                <div>
+                                    <h3 class="text-xs font-bold text-slate-800 line-clamp-2 mb-1.5 group-hover:text-brand-600 transition">${p.title}</h3>
+                                </div>
+                                <div>
+                                    <div class="flex items-baseline space-x-1.5">
+                                        <span class="text-sm font-black text-brand-600">${formatIDR(finalPrice)}</span>
+                                        ${p.discount > 0 ? `<span class="text-[10px] text-slate-400 line-through">${formatIDR(p.price)}</span>` : ''}
+                                    </div>
+                                    <button class="w-full mt-3 py-1.5 bg-slate-100 group-hover:bg-brand-600 text-slate-700 group-hover:text-white rounded-xl text-[11px] font-bold transition flex items-center justify-center space-x-1">
+                                        <i class="fa-solid fa-eye text-xs"></i>
+                                        <span>Lihat Detail</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            }
+        }
+
         function openProductModal(id) {
             activeProduct = products.find(p => p.id === id);
             if (!activeProduct) return;
@@ -793,12 +924,17 @@
                 document.getElementById('modal-original-price').classList.add('hidden');
             }
 
+            history.pushState({ screen: 'detail', productId: id }, "", "#detail");
             document.getElementById('product-modal').classList.remove('hidden');
         }
 
         function closeProductModal() {
-            document.getElementById('product-modal').classList.add('hidden');
-            activeProduct = null;
+            if (window.location.hash === "#detail") {
+                history.back();
+            } else {
+                document.getElementById('product-modal').classList.add('hidden');
+                activeProduct = null;
+            }
         }
 
         function orderViaWA() {
@@ -822,15 +958,21 @@
             document.getElementById('admin-login-view').classList.remove('hidden');
             document.getElementById('admin-content-view').classList.add('hidden');
             document.getElementById('admin-pin').value = "";
+            
+            history.pushState({ screen: 'admin' }, "", "#admin");
             document.getElementById('admin-modal').classList.remove('hidden');
         }
 
         function closeAdminModal() {
-            isAdminLoggedIn = false;
-            document.getElementById('admin-modal').classList.add('hidden');
-            document.getElementById('admin-login-view').classList.remove('hidden');
-            document.getElementById('admin-content-view').classList.add('hidden');
-            document.getElementById('admin-pin').value = "";
+            if (window.location.hash === "#admin") {
+                history.back();
+            } else {
+                isAdminLoggedIn = false;
+                document.getElementById('admin-modal').classList.add('hidden');
+                document.getElementById('admin-login-view').classList.remove('hidden');
+                document.getElementById('admin-content-view').classList.add('hidden');
+                document.getElementById('admin-pin').value = "";
+            }
         }
 
         function handleImageUpload(e) {
